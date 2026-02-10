@@ -1,0 +1,13 @@
+.DS_Store
+node_modules
+
+# Raycast
+.raycast
+
+# Build outputs
+dist
+build
+
+# Logs
+*.log
+
