@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import type { Dirent } from "fs";
 import path from "path";
 
-import { openSync } from "fontkit";
+import { openSync, type Font } from "fontkit";
 
 import { classifySource, getFontRoots, FontSource } from "./font-paths";
 import { walkFiles } from "./fs-walk";
@@ -70,7 +70,10 @@ export async function loadFontIndex(): Promise<FontIndex | null> {
     const faces: FontFace[] = parsed.faces
       .filter((f): f is FontFace => Boolean(f && typeof f === "object"))
       .filter((f) => typeof f.id === "string")
-      .filter((f) => typeof f.familyName === "string" && typeof f.styleName === "string")
+      .filter(
+        (f) =>
+          typeof f.familyName === "string" && typeof f.styleName === "string",
+      )
       .filter((f) => typeof f.displayName === "string")
       .filter((f) => typeof f.filePath === "string")
       .filter((f) => typeof f.fileExt === "string")
@@ -79,7 +82,10 @@ export async function loadFontIndex(): Promise<FontIndex | null> {
 
     return {
       version: FONT_INDEX_VERSION,
-      builtAt: typeof parsed.builtAt === "string" ? parsed.builtAt : new Date(0).toISOString(),
+      builtAt:
+        typeof parsed.builtAt === "string"
+          ? parsed.builtAt
+          : new Date(0).toISOString(),
       faces,
     };
   } catch {
@@ -102,7 +108,9 @@ async function getMobileAssetFontRoots(): Promise<string[]> {
   }
 
   const roots = dirents
-    .filter((d) => d.isDirectory() && d.name.startsWith(MOBILE_ASSET_FONT_PREFIX))
+    .filter(
+      (d) => d.isDirectory() && d.name.startsWith(MOBILE_ASSET_FONT_PREFIX),
+    )
     .map((d) => path.join(MOBILE_ASSET_ROOT, d.name));
 
   return roots;
@@ -123,12 +131,13 @@ function getFileBaseName(filePath: string): string {
 function toFontFace(
   filePath: string,
   fileMtimeMs: number,
-  font: any,
+  font: Font,
 ): Omit<FontFace, "id"> | null {
   const fallbackFamily = getFileBaseName(filePath);
 
   const familyName = normalizeName(font?.familyName) ?? fallbackFamily;
-  const styleName = normalizeName(font?.subfamilyName ?? font?.styleName) ?? "Regular";
+  const styleName =
+    normalizeName(font?.subfamilyName ?? font?.styleName) ?? "Regular";
 
   const postscriptName = normalizeName(font?.postscriptName);
   const fullName = normalizeName(font?.fullName);
@@ -150,10 +159,15 @@ function toFontFace(
   };
 }
 
-export async function buildFontIndex(): Promise<{ index: FontIndex; stats: BuildStats }> {
+export async function buildFontIndex(): Promise<{
+  index: FontIndex;
+  stats: BuildStats;
+}> {
   const roots = getFontRoots().map((r) => r.path);
   const mobileAssetRoots = await getMobileAssetFontRoots();
-  const files = await walkFiles([...roots, ...mobileAssetRoots], { allowedExtensions: FONT_EXTENSIONS });
+  const files = await walkFiles([...roots, ...mobileAssetRoots], {
+    allowedExtensions: FONT_EXTENSIONS,
+  });
 
   const facesById = new Map<string, FontFace>();
   let parsedFaces = 0;
@@ -214,7 +228,9 @@ export async function buildFontIndex(): Promise<{ index: FontIndex; stats: Build
 }
 
 export function pickRepresentativeFace(faces: FontFace[]): FontFace {
-  const regular = faces.find((f) => f.styleName.trim().toLowerCase() === "regular");
+  const regular = faces.find(
+    (f) => f.styleName.trim().toLowerCase() === "regular",
+  );
   return regular ?? faces[0];
 }
 
@@ -229,7 +245,9 @@ export function groupIntoFamilies(faces: FontFace[]): FontFamily[] {
 
   const families: FontFamily[] = [];
   for (const [familyName, familyFaces] of byFamily.entries()) {
-    const facesSorted = [...familyFaces].sort((a, b) => a.styleName.localeCompare(b.styleName));
+    const facesSorted = [...familyFaces].sort((a, b) =>
+      a.styleName.localeCompare(b.styleName),
+    );
     const representative = pickRepresentativeFace(facesSorted);
     families.push({
       id: sha1(familyName),
