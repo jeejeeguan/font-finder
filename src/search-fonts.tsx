@@ -400,8 +400,17 @@ function useFacePreviewQueue(
       if (!faceId) return;
       if (!faceById.has(faceId)) return;
       if (previewByFaceIdRef.current[faceId] !== undefined) return;
-      if (queuedSetRef.current.has(faceId)) return;
       if (runningSetRef.current.has(faceId)) return;
+      if (queuedSetRef.current.has(faceId)) {
+        if (priority === "high") {
+          queueRef.current = [
+            faceId,
+            ...queueRef.current.filter((queuedId) => queuedId !== faceId),
+          ];
+          pumpQueue();
+        }
+        return;
+      }
 
       if (priority === "high") queueRef.current.unshift(faceId);
       else queueRef.current.push(faceId);

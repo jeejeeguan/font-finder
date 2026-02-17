@@ -249,16 +249,18 @@ function buildVectorPreviewSvg(options: {
   const ascentUnits = Number.isFinite(ascent) ? ascent : unitsPerEm * 0.8;
   const descentUnits = Number.isFinite(descent) ? descent : -unitsPerEm * 0.2;
 
-  let runWidthUnits = positions.reduce(
-    (acc, p) => acc + (Number(p?.xAdvance) || 0),
+  const positionAdvances = positions.map((p) => Number(p?.xAdvance) || 0);
+  const positionRunWidthUnits = positionAdvances.reduce(
+    (acc, xAdvance) => acc + xAdvance,
     0,
   );
-  if (runWidthUnits <= 0) {
-    runWidthUnits = glyphs.reduce(
-      (acc, glyph) => acc + (Number(glyph?.advanceWidth) || 0),
-      0,
-    );
-  }
+  const useGlyphAdvanceFallback = positionRunWidthUnits <= 0;
+  const glyphAdvances = useGlyphAdvanceFallback
+    ? glyphs.map((glyph) => Number(glyph?.advanceWidth) || 0)
+    : null;
+  const runWidthUnits = useGlyphAdvanceFallback
+    ? glyphAdvances.reduce((acc, advanceWidth) => acc + advanceWidth, 0)
+    : positionRunWidthUnits;
   const runHeightUnits = ascentUnits - descentUnits;
   if (runWidthUnits <= 0 || runHeightUnits <= 0) return null;
 
@@ -287,7 +289,9 @@ function buildVectorPreviewSvg(options: {
 
     const xOffsetUnits = Number(pos?.xOffset) || 0;
     const yOffsetUnits = Number(pos?.yOffset) || 0;
-    const xAdvanceUnits = Number(pos?.xAdvance) || 0;
+    const xAdvanceUnits = useGlyphAdvanceFallback
+      ? (glyphAdvances?.[i] ?? 0)
+      : positionAdvances[i];
 
     const x = startX + (penXUnits + xOffsetUnits) * scale;
     const y = baselineY - yOffsetUnits * scale;
