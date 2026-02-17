@@ -10,7 +10,9 @@ export async function walkFiles(
   roots: string[],
   options: WalkFilesOptions,
 ): Promise<string[]> {
-  const allowed = new Set(options.allowedExtensions.map((ext) => ext.toLowerCase()));
+  const allowed = new Set(
+    options.allowedExtensions.map((ext) => ext.toLowerCase()),
+  );
   const results: string[] = [];
   const queue: string[] = [...roots];
 

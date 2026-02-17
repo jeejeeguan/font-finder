@@ -7,7 +7,10 @@ export function toKeywordVariants(value: string): string[] {
   return condensed === lower ? [lower] : [lower, condensed];
 }
 
-export function uniqueStrings(values: Array<string | undefined | null>, max = 200): string[] {
+export function uniqueStrings(
+  values: Array<string | undefined | null>,
+  max = 200,
+): string[] {
   const set = new Set<string>();
   const out: string[] = [];
 
@@ -24,4 +27,3 @@ export function uniqueStrings(values: Array<string | undefined | null>, max = 20
 
   return out;
 }
-

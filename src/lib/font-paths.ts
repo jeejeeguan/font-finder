@@ -19,10 +19,15 @@ export function getFontRoots(): FontRoot[] {
 export function classifySource(filePath: string): FontSource {
   const normalized = path.normalize(filePath);
   if (normalized.startsWith("/System/Library/Fonts")) return "system";
-  if (normalized.startsWith("/System/Library/AssetsV2/com_apple_MobileAsset_Font")) return "system";
+  if (
+    normalized.startsWith("/System/Library/AssetsV2/com_apple_MobileAsset_Font")
+  )
+    return "system";
   if (normalized.startsWith("/Library/Fonts")) return "library";
 
-  const userFontsRoot = path.normalize(path.join(os.homedir(), "Library/Fonts"));
+  const userFontsRoot = path.normalize(
+    path.join(os.homedir(), "Library/Fonts"),
+  );
   if (normalized.startsWith(userFontsRoot)) return "user";
   return "other";
 }
