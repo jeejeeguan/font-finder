@@ -9,13 +9,25 @@ import {
   Toast,
 } from "@raycast/api";
 import { useCachedState } from "@raycast/utils";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import path from "path";
 import { pathToFileURL } from "url";
 
 import type { FontFace, FontFamily } from "./lib/font-index";
-import { buildFontIndex, groupIntoFamilies, isIndexStale, loadFontIndex, pickRepresentativeFace } from "./lib/font-index";
-import { getPreviewImage, getVectorPreviewSvg } from "./lib/font-preview";
+import {
+  buildFontIndex,
+  groupIntoFamilies,
+  isIndexStale,
+  loadFontIndex,
+  pickRepresentativeFace,
+} from "./lib/font-index";
+import { getFontPreview } from "./lib/font-preview";
 import { uniqueStrings } from "./lib/strings";
 
 function formatStyleCount(count: number): string {
@@ -77,7 +89,13 @@ async function openFontBook(filePath?: string): Promise<void> {
 function buildFamilyKeywords(family: FontFamily): string[] {
   const values: Array<string | undefined | null> = [family.familyName];
   for (const face of family.faces) {
-    values.push(face.familyName, face.styleName, face.displayName, face.postscriptName, face.fullName);
+    values.push(
+      face.familyName,
+      face.styleName,
+      face.displayName,
+      face.postscriptName,
+      face.fullName,
+    );
     const fileName = path.basename(face.filePath);
     const fileStem = fileName.replace(/\.[^.]+$/, "");
     values.push(fileName, fileStem);
@@ -100,24 +118,97 @@ function buildFaceKeywords(face: FontFace): string[] {
   return uniqueStrings(values);
 }
 
+const PREVIEW_PLACEHOLDER_WIDTH = 720;
+const PREVIEW_PLACEHOLDER_HEIGHT = 240;
+const DETAIL_SKELETON_WIDTH = 720;
+const DETAIL_SKELETON_HEIGHT = 280;
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function toSvgDataUrl(svg: string): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function buildPreviewPlaceholderUrl(label: string): string {
+  const escapedLabel = escapeSvgText(label);
+  const textLine =
+    escapedLabel.length > 0
+      ? `<text x="${PREVIEW_PLACEHOLDER_WIDTH / 2}" y="126" text-anchor="middle" font-size="20" fill="#9b9b9b" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">${escapedLabel}</text>`
+      : "";
+
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${PREVIEW_PLACEHOLDER_WIDTH}" height="${PREVIEW_PLACEHOLDER_HEIGHT}" viewBox="0 0 ${PREVIEW_PLACEHOLDER_WIDTH} ${PREVIEW_PLACEHOLDER_HEIGHT}">`,
+    `<rect x="0" y="0" width="${PREVIEW_PLACEHOLDER_WIDTH}" height="${PREVIEW_PLACEHOLDER_HEIGHT}" fill="#f6f6f6"/>`,
+    `<rect x="0.5" y="0.5" width="${PREVIEW_PLACEHOLDER_WIDTH - 1}" height="${PREVIEW_PLACEHOLDER_HEIGHT - 1}" fill="none" stroke="#e5e5e5"/>`,
+    textLine,
+    `</svg>`,
+  ].join("");
+
+  return toSvgDataUrl(svg);
+}
+
+const LOADING_PREVIEW_PLACEHOLDER_URL = buildPreviewPlaceholderUrl("");
+const UNAVAILABLE_PREVIEW_PLACEHOLDER_URL = buildPreviewPlaceholderUrl(
+  "Preview Unavailable",
+);
+const DETAIL_SWITCH_SKELETON_URL = toSvgDataUrl(
+  [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${DETAIL_SKELETON_WIDTH}" height="${DETAIL_SKELETON_HEIGHT}" viewBox="0 0 ${DETAIL_SKELETON_WIDTH} ${DETAIL_SKELETON_HEIGHT}">`,
+    `<rect x="0" y="0" width="${DETAIL_SKELETON_WIDTH}" height="${DETAIL_SKELETON_HEIGHT}" fill="none"/>`,
+    `<rect x="0" y="8" width="164" height="34" rx="8" fill="#ececec"/>`,
+    `<rect x="0" y="68" width="430" height="20" rx="6" fill="#efefef"/>`,
+    `<rect x="0" y="102" width="376" height="20" rx="6" fill="#efefef"/>`,
+    `<rect x="0" y="136" width="452" height="20" rx="6" fill="#efefef"/>`,
+    `<rect x="0" y="170" width="398" height="20" rx="6" fill="#efefef"/>`,
+    `<rect x="0" y="204" width="340" height="20" rx="6" fill="#efefef"/>`,
+    `</svg>`,
+  ].join(""),
+);
+
+function buildPreviewBlockMarkdown(
+  previewPath: string | null | undefined,
+  isPreviewLoading: boolean,
+): string {
+  if (previewPath) {
+    return `![Preview](${toLocalFileUrl(previewPath)})`;
+  }
+
+  const placeholderUrl = isPreviewLoading
+    ? LOADING_PREVIEW_PLACEHOLDER_URL
+    : UNAVAILABLE_PREVIEW_PLACEHOLDER_URL;
+  return `![Preview](${placeholderUrl})`;
+}
+
 function familyDetailMarkdown(
   family: FontFamily,
   representative: FontFace,
   previewPath: string | null | undefined,
   isPreviewLoading: boolean,
+  showDetails = true,
+  showDetailSkeleton = false,
 ): string {
-  const imageUrl = previewPath ? toLocalFileUrl(previewPath) : null;
-  const image = imageUrl ? `![Preview](${imageUrl})` : isPreviewLoading ? "Loading preview…" : "Preview unavailable.";
+  const previewBlock = buildPreviewBlockMarkdown(previewPath, isPreviewLoading);
+  if (!showDetails) {
+    return showDetailSkeleton
+      ? `${previewBlock}\n\n![Details](${DETAIL_SWITCH_SKELETON_URL})`
+      : previewBlock;
+  }
 
   const lines: string[] = [];
-  lines.push(image);
+  lines.push(previewBlock);
   lines.push("");
   lines.push("## Details");
   lines.push("");
   lines.push(`- **Family**: ${family.familyName}`);
   lines.push(`- **Styles**: ${family.faces.length}`);
   lines.push(`- **Representative Style**: ${representative.styleName}`);
-  if (representative.postscriptName) lines.push(`- **PostScript**: ${representative.postscriptName}`);
+  if (representative.postscriptName)
+    lines.push(`- **PostScript**: ${representative.postscriptName}`);
   lines.push(`- **Source**: ${representative.source}`);
   lines.push("");
   lines.push("## File");
@@ -133,19 +224,26 @@ function faceDetailMarkdown(
   face: FontFace,
   previewPath: string | null | undefined,
   isPreviewLoading: boolean,
+  showDetails = true,
+  showDetailSkeleton = false,
 ): string {
-  const imageUrl = previewPath ? toLocalFileUrl(previewPath) : null;
-  const image = imageUrl ? `![Preview](${imageUrl})` : isPreviewLoading ? "Loading preview…" : "Preview unavailable.";
+  const previewBlock = buildPreviewBlockMarkdown(previewPath, isPreviewLoading);
+  if (!showDetails) {
+    return showDetailSkeleton
+      ? `${previewBlock}\n\n![Details](${DETAIL_SWITCH_SKELETON_URL})`
+      : previewBlock;
+  }
 
   const lines: string[] = [];
-  lines.push(image);
+  lines.push(previewBlock);
   lines.push("");
   lines.push("## Details");
   lines.push("");
   lines.push(`- **Family**: ${face.familyName}`);
   lines.push(`- **Style**: ${face.styleName}`);
   lines.push(`- **Display Name**: ${face.displayName}`);
-  if (face.postscriptName) lines.push(`- **PostScript**: ${face.postscriptName}`);
+  if (face.postscriptName)
+    lines.push(`- **PostScript**: ${face.postscriptName}`);
   if (face.fullName) lines.push(`- **Full Name**: ${face.fullName}`);
   lines.push(`- **Source**: ${face.source}`);
   lines.push("");
@@ -158,15 +256,221 @@ function faceDetailMarkdown(
   return lines.join("\n");
 }
 
-function StylesScreen(props: { family: FontFamily; onRebuildIndex: () => Promise<void> }) {
+type PreviewPriority = "high" | "normal";
+
+function normalizeSearchText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function getSearchScore(keywords: string[], normalizedQuery: string): number {
+  if (!normalizedQuery) return 3;
+
+  let best = Number.POSITIVE_INFINITY;
+  for (const keyword of keywords) {
+    if (keyword === normalizedQuery) return 0;
+    if (keyword.startsWith(normalizedQuery)) best = Math.min(best, 1);
+    else if (keyword.includes(normalizedQuery)) best = Math.min(best, 2);
+  }
+
+  return Number.isFinite(best) ? best : 4;
+}
+
+function useFacePreviewQueue(
+  faces: FontFace[],
+  options?: {
+    concurrency?: number;
+  },
+): {
+  previewByFaceId: Record<string, string | null>;
+  isFacePreviewLoading: (faceId: string) => boolean;
+  enqueuePreview: (faceId: string, priority?: PreviewPriority) => void;
+  enqueuePreviews: (faceIds: string[], priority?: PreviewPriority) => void;
+} {
+  const concurrency = options?.concurrency ?? 2;
+  const [previewByFaceId, setPreviewByFaceId] = useState<
+    Record<string, string | null>
+  >({});
+  const [loadingByFaceId, setLoadingByFaceId] = useState<Record<string, true>>(
+    {},
+  );
+
+  const faceById = useMemo(
+    () => new Map(faces.map((face) => [face.id, face])),
+    [faces],
+  );
+
+  const queueRef = useRef<string[]>([]);
+  const queuedSetRef = useRef(new Set<string>());
+  const runningSetRef = useRef(new Set<string>());
+  const activeCountRef = useRef(0);
+  const disposedRef = useRef(false);
+  const previewByFaceIdRef = useRef(previewByFaceId);
+
+  useEffect(() => {
+    previewByFaceIdRef.current = previewByFaceId;
+  }, [previewByFaceId]);
+
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const allowed = new Set(faces.map((face) => face.id));
+    queueRef.current = queueRef.current.filter((faceId) => allowed.has(faceId));
+    queuedSetRef.current = new Set(
+      Array.from(queuedSetRef.current).filter((faceId) => allowed.has(faceId)),
+    );
+    runningSetRef.current = new Set(
+      Array.from(runningSetRef.current).filter((faceId) => allowed.has(faceId)),
+    );
+    setLoadingByFaceId((prev) => {
+      const next: Record<string, true> = {};
+      for (const key of Object.keys(prev)) {
+        if (allowed.has(key)) next[key] = true;
+      }
+      return next;
+    });
+  }, [faces]);
+
+  const pumpQueue = useCallback(() => {
+    while (
+      activeCountRef.current < concurrency &&
+      queueRef.current.length > 0
+    ) {
+      const faceId = queueRef.current.shift();
+      if (!faceId) break;
+
+      queuedSetRef.current.delete(faceId);
+
+      if (previewByFaceIdRef.current[faceId] !== undefined) continue;
+      if (runningSetRef.current.has(faceId)) continue;
+
+      const face = faceById.get(faceId);
+      if (!face) continue;
+
+      runningSetRef.current.add(faceId);
+      activeCountRef.current += 1;
+
+      setLoadingByFaceId((prev) =>
+        prev[faceId] ? prev : { ...prev, [faceId]: true },
+      );
+
+      void getFontPreview({
+        filePath: face.filePath,
+        fileMtimeMs: face.fileMtimeMs,
+        postscriptName: face.postscriptName,
+        familyName: face.familyName,
+      })
+        .then((previewPath) => {
+          if (disposedRef.current) return;
+          setPreviewByFaceId((prev) =>
+            prev[faceId] !== undefined
+              ? prev
+              : { ...prev, [faceId]: previewPath },
+          );
+        })
+        .finally(() => {
+          runningSetRef.current.delete(faceId);
+          activeCountRef.current = Math.max(0, activeCountRef.current - 1);
+
+          if (disposedRef.current) return;
+
+          setLoadingByFaceId((prev) => {
+            if (!prev[faceId]) return prev;
+            const next = { ...prev };
+            delete next[faceId];
+            return next;
+          });
+
+          setTimeout(() => {
+            if (!disposedRef.current) pumpQueue();
+          }, 0);
+        });
+    }
+  }, [concurrency, faceById]);
+
+  const enqueuePreview = useCallback(
+    (faceId: string, priority: PreviewPriority = "normal") => {
+      if (!faceId) return;
+      if (!faceById.has(faceId)) return;
+      if (previewByFaceIdRef.current[faceId] !== undefined) return;
+      if (runningSetRef.current.has(faceId)) return;
+      if (queuedSetRef.current.has(faceId)) {
+        if (priority === "high") {
+          queueRef.current = [
+            faceId,
+            ...queueRef.current.filter((queuedId) => queuedId !== faceId),
+          ];
+          pumpQueue();
+        }
+        return;
+      }
+
+      if (priority === "high") queueRef.current.unshift(faceId);
+      else queueRef.current.push(faceId);
+      queuedSetRef.current.add(faceId);
+      pumpQueue();
+    },
+    [faceById, pumpQueue],
+  );
+
+  const enqueuePreviews = useCallback(
+    (faceIds: string[], priority: PreviewPriority = "normal") => {
+      const orderedIds = priority === "high" ? [...faceIds].reverse() : faceIds;
+
+      for (const faceId of orderedIds) {
+        if (!faceId) continue;
+        if (!faceById.has(faceId)) continue;
+        if (previewByFaceIdRef.current[faceId] !== undefined) continue;
+        if (queuedSetRef.current.has(faceId)) continue;
+        if (runningSetRef.current.has(faceId)) continue;
+
+        if (priority === "high") queueRef.current.unshift(faceId);
+        else queueRef.current.push(faceId);
+        queuedSetRef.current.add(faceId);
+      }
+
+      pumpQueue();
+    },
+    [faceById, pumpQueue],
+  );
+
+  const isFacePreviewLoading = useCallback(
+    (faceId: string) => {
+      return Boolean(loadingByFaceId[faceId]);
+    },
+    [loadingByFaceId],
+  );
+
+  return {
+    previewByFaceId,
+    isFacePreviewLoading,
+    enqueuePreview,
+    enqueuePreviews,
+  };
+}
+
+function StylesScreen(props: {
+  family: FontFamily;
+  onRebuildIndex: () => Promise<void>;
+}) {
   const { family, onRebuildIndex } = props;
 
   const [selectedFaceId, setSelectedFaceId] = useState<string | null>(null);
-  const [previewByFaceId, setPreviewByFaceId] = useState<Record<string, string | null>>({});
-  const [previewLoadingFaceId, setPreviewLoadingFaceId] = useState<string | null>(null);
-  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const facesById = useMemo(() => new Map(family.faces.map((f) => [f.id, f])), [family.faces]);
+  const {
+    previewByFaceId,
+    isFacePreviewLoading,
+    enqueuePreview,
+    enqueuePreviews,
+  } = useFacePreviewQueue(family.faces, {
+    concurrency: 2,
+  });
 
   useEffect(() => {
     if (selectedFaceId) return;
@@ -176,37 +480,21 @@ function StylesScreen(props: { family: FontFamily; onRebuildIndex: () => Promise
 
   useEffect(() => {
     if (!selectedFaceId) return;
-    const face = facesById.get(selectedFaceId);
-    if (!face) return;
+    enqueuePreview(selectedFaceId, "high");
+  }, [enqueuePreview, selectedFaceId]);
 
-    if (previewByFaceId[selectedFaceId] !== undefined) return;
+  useEffect(() => {
+    const faceIds = family.faces.map((face) => face.id);
+    if (faceIds.length === 0) return;
 
-    if (previewTimer.current) clearTimeout(previewTimer.current);
-    previewTimer.current = setTimeout(() => {
-      setPreviewLoadingFaceId(selectedFaceId);
-      const previewPromise =
-        face.fileExt === "ttc"
-          ? getVectorPreviewSvg({
-              filePath: face.filePath,
-              fileMtimeMs: face.fileMtimeMs,
-              postscriptName: face.postscriptName,
-              familyName: face.familyName,
-            }).then((p) => p ?? getPreviewImage(face.filePath, face.fileMtimeMs))
-          : getPreviewImage(face.filePath, face.fileMtimeMs);
+    if (selectedFaceId) {
+      const remaining = faceIds.filter((faceId) => faceId !== selectedFaceId);
+      enqueuePreviews(remaining, "normal");
+      return;
+    }
 
-      previewPromise
-        .then((p) => {
-          setPreviewByFaceId((prev) => ({ ...prev, [selectedFaceId]: p }));
-        })
-        .finally(() => {
-          setPreviewLoadingFaceId((current) => (current === selectedFaceId ? null : current));
-        });
-    }, 150);
-
-    return () => {
-      if (previewTimer.current) clearTimeout(previewTimer.current);
-    };
-  }, [facesById, previewByFaceId, selectedFaceId]);
+    enqueuePreviews(faceIds, "normal");
+  }, [enqueuePreviews, family.faces, selectedFaceId]);
 
   return (
     <List
@@ -218,7 +506,7 @@ function StylesScreen(props: { family: FontFamily; onRebuildIndex: () => Promise
     >
       {family.faces.map((face) => {
         const previewPath = previewByFaceId[face.id];
-        const isPreviewLoading = previewLoadingFaceId === face.id;
+        const isPreviewLoading = isFacePreviewLoading(face.id);
 
         return (
           <List.Item
@@ -228,33 +516,57 @@ function StylesScreen(props: { family: FontFamily; onRebuildIndex: () => Promise
             subtitle={face.postscriptName}
             keywords={buildFaceKeywords(face)}
             quickLook={{ path: face.filePath, name: face.displayName }}
-            detail={<List.Item.Detail markdown={faceDetailMarkdown(face, previewPath, isPreviewLoading)} />}
+            detail={
+              <List.Item.Detail
+                markdown={faceDetailMarkdown(
+                  face,
+                  previewPath,
+                  isPreviewLoading,
+                )}
+              />
+            }
             actions={
               <ActionPanel>
                 <Action
                   title="Copy Family Name"
                   icon={Icon.Clipboard}
-                  onAction={() => copyToClipboard(face.familyName, `Family: ${face.familyName}`)}
+                  onAction={() =>
+                    copyToClipboard(
+                      face.familyName,
+                      `Family: ${face.familyName}`,
+                    )
+                  }
                 />
                 <Action
                   title="Copy Display Name (Family + Style)"
                   icon={Icon.Text}
-                  onAction={() => copyToClipboard(face.displayName, `Display Name: ${face.displayName}`)}
+                  onAction={() =>
+                    copyToClipboard(
+                      face.displayName,
+                      `Display Name: ${face.displayName}`,
+                    )
+                  }
                 />
                 {face.postscriptName ? (
                   <Action
                     title="Copy PostScript Name"
                     icon={Icon.Text}
                     onAction={() =>
-                      copyToClipboard(face.postscriptName ?? "", `PostScript: ${face.postscriptName ?? ""}`)
+                      copyToClipboard(
+                        face.postscriptName ?? "",
+                        `PostScript: ${face.postscriptName ?? ""}`,
+                      )
                     }
                   />
                 ) : null}
                 <Action
-                  title="Copy CSS font-family"
+                  title="Copy CSS Font Family"
                   icon={Icon.Code}
                   onAction={() =>
-                    copyToClipboard(`font-family: "${face.familyName}";`, `CSS: font-family: "${face.familyName}";`)
+                    copyToClipboard(
+                      `font-family: "${face.familyName}";`,
+                      `CSS: font-family: "${face.familyName}";`,
+                    )
                   }
                 />
                 <Action
@@ -263,8 +575,13 @@ function StylesScreen(props: { family: FontFamily; onRebuildIndex: () => Promise
                   onAction={() => openFontBook(face.filePath)}
                   shortcut={Keyboard.Shortcut.Common.Open}
                 />
-                <Action.ShowInFinder path={face.filePath} shortcut={{ modifiers: ["cmd", "shift"], key: "f" }} />
-                <Action.ToggleQuickLook shortcut={Keyboard.Shortcut.Common.ToggleQuickLook} />
+                <Action.ShowInFinder
+                  path={face.filePath}
+                  shortcut={{ modifiers: ["cmd", "shift"], key: "f" }}
+                />
+                <Action.ToggleQuickLook
+                  shortcut={Keyboard.Shortcut.Common.ToggleQuickLook}
+                />
                 <Action
                   title="Rebuild Font Index"
                   icon={Icon.ArrowClockwise}
@@ -285,16 +602,56 @@ export default function SearchFontsCommand() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null);
-  const [includeHiddenFonts, setIncludeHiddenFonts] = useCachedState<boolean>("include-hidden-fonts", false);
+  const [detailFamilyId, setDetailFamilyId] = useState<string | null>(null);
+  const [
+    showDetailSkeletonWhileSwitching,
+    setShowDetailSkeletonWhileSwitching,
+  ] = useState(false);
+  const [warmupSearchText, setWarmupSearchText] = useState("");
+  const [includeHiddenFonts, setIncludeHiddenFonts] = useCachedState<boolean>(
+    "include-hidden-fonts",
+    false,
+  );
 
-  const [previewByFaceId, setPreviewByFaceId] = useState<Record<string, string | null>>({});
-  const [previewLoadingFaceId, setPreviewLoadingFaceId] = useState<string | null>(null);
-  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const familiesById = useMemo(() => new Map(families.map((f) => [f.id, f])), [families]);
+  const familiesById = useMemo(
+    () => new Map(families.map((f) => [f.id, f])),
+    [families],
+  );
   const visibleFamilies = useMemo(() => {
-    return includeHiddenFonts ? families : families.filter((f) => !isHiddenFamilyName(f.familyName));
+    return includeHiddenFonts
+      ? families
+      : families.filter((f) => !isHiddenFamilyName(f.familyName));
   }, [families, includeHiddenFonts]);
+  const allFaces = useMemo(
+    () => families.flatMap((family) => family.faces),
+    [families],
+  );
+  const allFacesById = useMemo(
+    () => new Map(allFaces.map((face) => [face.id, face])),
+    [allFaces],
+  );
+  const [previewByFaceId, setPreviewByFaceId] = useState<
+    Record<string, string | null>
+  >({});
+  const [previewLoadingFaceId, setPreviewLoadingFaceId] = useState<
+    string | null
+  >(null);
+  const detailSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const searchTextDebounceTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const selectedPreviewRunTokenRef = useRef(0);
+  const warmupRunTokenRef = useRef(0);
+
+  const familyKeywordsById = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const family of families) {
+      map.set(family.id, buildFamilyKeywords(family));
+    }
+    return map;
+  }, [families]);
 
   useEffect(() => {
     const allowed = new Set(visibleFamilies.map((f) => f.id));
@@ -302,13 +659,59 @@ export default function SearchFontsCommand() {
     setSelectedFamilyId(visibleFamilies[0]?.id ?? null);
   }, [selectedFamilyId, visibleFamilies]);
 
+  useEffect(() => {
+    return () => {
+      if (detailSelectionTimerRef.current) {
+        clearTimeout(detailSelectionTimerRef.current);
+      }
+      if (searchTextDebounceTimerRef.current) {
+        clearTimeout(searchTextDebounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasPendingDetailSwitch = Boolean(detailSelectionTimerRef.current);
+    if (detailSelectionTimerRef.current) {
+      clearTimeout(detailSelectionTimerRef.current);
+      detailSelectionTimerRef.current = null;
+    }
+
+    if (!selectedFamilyId) {
+      setDetailFamilyId(null);
+      setShowDetailSkeletonWhileSwitching(false);
+      return;
+    }
+
+    setShowDetailSkeletonWhileSwitching(hasPendingDetailSwitch);
+    setDetailFamilyId(null);
+    detailSelectionTimerRef.current = setTimeout(() => {
+      setDetailFamilyId(selectedFamilyId);
+      setShowDetailSkeletonWhileSwitching(false);
+      detailSelectionTimerRef.current = null;
+    }, 120);
+  }, [selectedFamilyId]);
+
+  const handleSearchTextChange = useCallback((value: string) => {
+    if (searchTextDebounceTimerRef.current) {
+      clearTimeout(searchTextDebounceTimerRef.current);
+    }
+
+    searchTextDebounceTimerRef.current = setTimeout(() => {
+      setWarmupSearchText(value);
+    }, 160);
+  }, []);
+
   async function rebuildIndex(options?: { silent?: boolean }) {
     const silent = options?.silent ?? false;
 
     if (!silent) {
       setIsLoading(true);
       setError(null);
-      await showToast({ style: Toast.Style.Animated, title: "Building Font Index…" });
+      await showToast({
+        style: Toast.Style.Animated,
+        title: "Building Font Index…",
+      });
     }
 
     try {
@@ -373,41 +776,109 @@ export default function SearchFontsCommand() {
   }, []);
 
   useEffect(() => {
-    if (!selectedFamilyId) return;
-    const family = familiesById.get(selectedFamilyId);
-    if (!family) return;
+    if (!detailFamilyId) {
+      setPreviewLoadingFaceId(null);
+      return;
+    }
+
+    const family = familiesById.get(detailFamilyId);
+    if (!family) {
+      setPreviewLoadingFaceId(null);
+      return;
+    }
 
     const representative = pickRepresentativeFace(family.faces);
     const faceId = representative.id;
+    if (previewByFaceId[faceId] !== undefined) {
+      setPreviewLoadingFaceId((current) =>
+        current === faceId ? null : current,
+      );
+      return;
+    }
 
-    if (previewByFaceId[faceId] !== undefined) return;
+    const runToken = selectedPreviewRunTokenRef.current + 1;
+    selectedPreviewRunTokenRef.current = runToken;
+    setPreviewLoadingFaceId(faceId);
 
-    if (previewTimer.current) clearTimeout(previewTimer.current);
-    previewTimer.current = setTimeout(() => {
-      setPreviewLoadingFaceId(faceId);
-      const previewPromise =
-        representative.fileExt === "ttc"
-          ? getVectorPreviewSvg({
-              filePath: representative.filePath,
-              fileMtimeMs: representative.fileMtimeMs,
-              postscriptName: representative.postscriptName,
-              familyName: family.familyName,
-            }).then((p) => p ?? getPreviewImage(representative.filePath, representative.fileMtimeMs))
-          : getPreviewImage(representative.filePath, representative.fileMtimeMs);
-
-      previewPromise
-        .then((p) => {
-          setPreviewByFaceId((prev) => ({ ...prev, [faceId]: p }));
-        })
-        .finally(() => {
-          setPreviewLoadingFaceId((current) => (current === faceId ? null : current));
-        });
-    }, 150);
+    void getFontPreview({
+      filePath: representative.filePath,
+      fileMtimeMs: representative.fileMtimeMs,
+      postscriptName: representative.postscriptName,
+      familyName: representative.familyName,
+    })
+      .then((previewPath) => {
+        if (selectedPreviewRunTokenRef.current !== runToken) return;
+        setPreviewByFaceId((prev) =>
+          prev[faceId] !== undefined
+            ? prev
+            : { ...prev, [faceId]: previewPath },
+        );
+      })
+      .finally(() => {
+        if (selectedPreviewRunTokenRef.current !== runToken) return;
+        setPreviewLoadingFaceId((current) =>
+          current === faceId ? null : current,
+        );
+      });
 
     return () => {
-      if (previewTimer.current) clearTimeout(previewTimer.current);
+      if (selectedPreviewRunTokenRef.current === runToken) {
+        selectedPreviewRunTokenRef.current += 1;
+      }
     };
-  }, [familiesById, previewByFaceId, selectedFamilyId]);
+  }, [detailFamilyId, familiesById, previewByFaceId]);
+
+  useEffect(() => {
+    if (visibleFamilies.length === 0) return;
+
+    const normalizedQuery = normalizeSearchText(warmupSearchText);
+    const prioritized = visibleFamilies
+      .map((family) => {
+        const representative = pickRepresentativeFace(family.faces);
+        const keywords = familyKeywordsById.get(family.id) ?? [];
+        return {
+          faceId: representative.id,
+          score: getSearchScore(keywords, normalizedQuery),
+        };
+      })
+      .sort((a, b) => a.score - b.score)
+      .map((entry) => entry.faceId);
+
+    const backgroundFaceIds = prioritized;
+
+    // Background: debounce warmup and avoid UI state updates.
+    const runToken = warmupRunTokenRef.current + 1;
+    warmupRunTokenRef.current = runToken;
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const faceId of backgroundFaceIds) {
+          if (warmupRunTokenRef.current !== runToken) break;
+
+          const face = allFacesById.get(faceId);
+          if (!face) continue;
+
+          try {
+            await getFontPreview({
+              filePath: face.filePath,
+              fileMtimeMs: face.fileMtimeMs,
+              postscriptName: face.postscriptName,
+              familyName: face.familyName,
+            });
+          } catch {
+            // Ignore warmup failures and continue with next item.
+          }
+        }
+      })();
+    }, 180);
+
+    return () => {
+      clearTimeout(timer);
+      if (warmupRunTokenRef.current === runToken) {
+        warmupRunTokenRef.current += 1;
+      }
+    };
+  }, [allFacesById, familyKeywordsById, visibleFamilies, warmupSearchText]);
 
   return (
     <List
@@ -415,13 +886,25 @@ export default function SearchFontsCommand() {
       isLoading={isLoading}
       isShowingDetail
       searchBarPlaceholder="Search fonts..."
+      onSearchTextChange={handleSearchTextChange}
       selectedItemId={selectedFamilyId ?? undefined}
       onSelectionChange={(id) => setSelectedFamilyId(id ?? null)}
     >
       {visibleFamilies.map((family) => {
         const representative = pickRepresentativeFace(family.faces);
-        const previewPath = previewByFaceId[representative.id];
-        const isPreviewLoading = previewLoadingFaceId === representative.id;
+        const showDetails = detailFamilyId === family.id;
+        const isDetailPending =
+          family.id === selectedFamilyId && detailFamilyId !== selectedFamilyId;
+        const hasPreviewResult =
+          previewByFaceId[representative.id] !== undefined;
+        const showDetailSkeleton =
+          isDetailPending && showDetailSkeletonWhileSwitching;
+        const previewPath = showDetails
+          ? previewByFaceId[representative.id]
+          : null;
+        const isPreviewLoading = showDetails
+          ? previewLoadingFaceId === representative.id || !hasPreviewResult
+          : isDetailPending;
 
         return (
           <List.Item
@@ -429,11 +912,21 @@ export default function SearchFontsCommand() {
             id={family.id}
             title={family.familyName}
             subtitle={formatStyleCount(family.faces.length)}
-            keywords={buildFamilyKeywords(family)}
-            quickLook={{ path: representative.filePath, name: family.familyName }}
+            keywords={familyKeywordsById.get(family.id) ?? []}
+            quickLook={{
+              path: representative.filePath,
+              name: family.familyName,
+            }}
             detail={
               <List.Item.Detail
-                markdown={familyDetailMarkdown(family, representative, previewPath, isPreviewLoading)}
+                markdown={familyDetailMarkdown(
+                  family,
+                  representative,
+                  previewPath,
+                  isPreviewLoading,
+                  showDetails,
+                  showDetailSkeleton,
+                )}
               />
             }
             actions={
@@ -441,24 +934,41 @@ export default function SearchFontsCommand() {
                 <Action
                   title="Copy Family Name"
                   icon={Icon.Clipboard}
-                  onAction={() => copyToClipboard(family.familyName, `Family: ${family.familyName}`)}
+                  onAction={() =>
+                    copyToClipboard(
+                      family.familyName,
+                      `Family: ${family.familyName}`,
+                    )
+                  }
                 />
                 <Action.Push
                   title="Browse Styles"
                   icon={Icon.List}
-                  target={<StylesScreen family={family} onRebuildIndex={() => rebuildIndex()} />}
+                  target={
+                    <StylesScreen
+                      family={family}
+                      onRebuildIndex={() => rebuildIndex()}
+                    />
+                  }
                 />
                 <Action
-                  title={includeHiddenFonts ? "Hide Hidden Fonts" : "Show Hidden Fonts"}
+                  title={
+                    includeHiddenFonts
+                      ? "Hide Hidden Fonts"
+                      : "Show Hidden Fonts"
+                  }
                   icon={Icon.Eye}
                   onAction={() => setIncludeHiddenFonts(!includeHiddenFonts)}
                   shortcut={{ modifiers: ["cmd", "shift"], key: "h" }}
                 />
                 <Action
-                  title="Copy CSS font-family"
+                  title="Copy CSS Font Family"
                   icon={Icon.Code}
                   onAction={() =>
-                    copyToClipboard(`font-family: "${family.familyName}";`, `CSS: font-family: "${family.familyName}";`)
+                    copyToClipboard(
+                      `font-family: "${family.familyName}";`,
+                      `CSS: font-family: "${family.familyName}";`,
+                    )
                   }
                 />
                 <Action
@@ -467,7 +977,9 @@ export default function SearchFontsCommand() {
                   onAction={() => openFontBook()}
                   shortcut={Keyboard.Shortcut.Common.Open}
                 />
-                <Action.ToggleQuickLook shortcut={Keyboard.Shortcut.Common.ToggleQuickLook} />
+                <Action.ToggleQuickLook
+                  shortcut={Keyboard.Shortcut.Common.ToggleQuickLook}
+                />
                 <Action
                   title="Rebuild Font Index"
                   icon={Icon.ArrowClockwise}
@@ -480,7 +992,11 @@ export default function SearchFontsCommand() {
         );
       })}
 
-      {!isLoading && visibleFamilies.length === 0 && families.length > 0 && !includeHiddenFonts && !error ? (
+      {!isLoading &&
+      visibleFamilies.length === 0 &&
+      families.length > 0 &&
+      !includeHiddenFonts &&
+      !error ? (
         <List.EmptyView
           icon={Icon.Text}
           title="No Fonts Found"
@@ -499,7 +1015,11 @@ export default function SearchFontsCommand() {
                 onAction={() => rebuildIndex()}
                 shortcut={{ modifiers: ["cmd"], key: "r" }}
               />
-              <Action title="Open Font Book" icon={Icon.AppWindow} onAction={() => openFontBook()} />
+              <Action
+                title="Open Font Book"
+                icon={Icon.AppWindow}
+                onAction={() => openFontBook()}
+              />
             </ActionPanel>
           }
         />
@@ -513,7 +1033,9 @@ export default function SearchFontsCommand() {
           actions={
             <ActionPanel>
               <Action
-                title={includeHiddenFonts ? "Hide Hidden Fonts" : "Show Hidden Fonts"}
+                title={
+                  includeHiddenFonts ? "Hide Hidden Fonts" : "Show Hidden Fonts"
+                }
                 icon={Icon.Eye}
                 onAction={() => setIncludeHiddenFonts(!includeHiddenFonts)}
                 shortcut={{ modifiers: ["cmd", "shift"], key: "h" }}
@@ -524,7 +1046,11 @@ export default function SearchFontsCommand() {
                 onAction={() => rebuildIndex()}
                 shortcut={{ modifiers: ["cmd"], key: "r" }}
               />
-              <Action title="Open Font Book" icon={Icon.AppWindow} onAction={() => openFontBook()} />
+              <Action
+                title="Open Font Book"
+                icon={Icon.AppWindow}
+                onAction={() => openFontBook()}
+              />
             </ActionPanel>
           }
         />
@@ -538,7 +1064,9 @@ export default function SearchFontsCommand() {
           actions={
             <ActionPanel>
               <Action
-                title={includeHiddenFonts ? "Hide Hidden Fonts" : "Show Hidden Fonts"}
+                title={
+                  includeHiddenFonts ? "Hide Hidden Fonts" : "Show Hidden Fonts"
+                }
                 icon={Icon.Eye}
                 onAction={() => setIncludeHiddenFonts(!includeHiddenFonts)}
                 shortcut={{ modifiers: ["cmd", "shift"], key: "h" }}
@@ -549,7 +1077,11 @@ export default function SearchFontsCommand() {
                 onAction={() => rebuildIndex()}
                 shortcut={{ modifiers: ["cmd"], key: "r" }}
               />
-              <Action title="Open Font Book" icon={Icon.AppWindow} onAction={() => openFontBook()} />
+              <Action
+                title="Open Font Book"
+                icon={Icon.AppWindow}
+                onAction={() => openFontBook()}
+              />
             </ActionPanel>
           }
         />
